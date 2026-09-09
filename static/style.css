@@ -418,12 +418,11 @@
       top: 64px;
       left: 22px;
     }
-    /* 16. EXPORT BUTTON */
-    .export-btn {
+    .new-chat-top-btn {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 9px 18px;
+      padding: 9px 16px;
       background:
         linear-gradient(
           135deg,
@@ -440,12 +439,12 @@
         0 4px 18px rgba(124, 58, 237, 0.4);
       transition: 0.25s;
     }
-    .export-btn:hover {
+    .new-chat-top-btn:hover {
       transform: translateY(-2px);
       box-shadow:
         0 6px 24px rgba(124, 58, 237, 0.6);
     }
-    .export-btn svg {
+    .new-chat-top-btn svg {
       width: 15px;
       height: 15px;
     }
@@ -666,7 +665,7 @@
     }
     /* 24. BOTTOM AREA */
     .bottom-wrap {
-      padding: 0 22px 20px;
+      padding: 0 22px 28px;
       flex-shrink: 0;
     }
     .bottom-inner {
@@ -676,6 +675,7 @@
     /* 25. CHAT INPUT CARD */
     .input-card {
       padding: 18px 18px 14px;
+      min-height: 118px;
       background:
         rgba(16, 14, 24, 0.75);
       border:
@@ -695,7 +695,8 @@
     /* 26. TEXTAREA */
     .input-card textarea {
       width: 100%;
-      max-height: 150px;
+      min-height: 68px;
+      max-height: 170px;
       resize: none;
       background: transparent;
       border: none;
@@ -883,65 +884,6 @@
       cursor: not-allowed;
       transform: none;
     }
-    /* 31. SUGGESTION CARDS */
-    .cards-row {
-      display: grid;
-      grid-template-columns:
-        repeat(3, 1fr);
-      gap: 14px;
-      margin-top: 16px;
-    }
-    .card {
-      padding: 18px;
-      background:
-        rgba(16, 14, 24, 0.7);
-      border:
-        1px solid var(--border);
-      border-radius: 18px;
-      backdrop-filter: blur(10px);
-      cursor: pointer;
-      transition: 0.3s;
-    }
-    .card:hover {
-      transform: translateY(-4px);
-      border-color: var(--purple);
-      box-shadow:
-        0 10px 30px rgba(124, 58, 237, 0.25);
-    }
-    /* 32. CARD ICON */
-    .card-icon {
-      width: 40px;
-      height: 40px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-bottom: 12px;
-      background:
-        linear-gradient(
-          135deg,
-          rgba(124, 58, 237, 0.35),
-          rgba(124, 58, 237, 0.1)
-        );
-      border:
-        1px solid rgba(124, 58, 237, 0.4);
-      border-radius: 12px;
-    }
-    .card-icon svg {
-      width: 19px;
-      height: 19px;
-      color: var(--purple-light);
-    }
-    .card h3 {
-      margin-bottom: 5px;
-      color: #fff;
-      font-size: 14.5px;
-      font-weight: 700;
-    }
-    .card p {
-      color: var(--muted);
-      font-size: 12.5px;
-      line-height: 1.5;
-    }
     /* 33. TOAST NOTIFICATION */
     .toast {
       position: fixed;
@@ -993,55 +935,19 @@
       .hamburger {
         display: flex;
       }
-      .export-btn {
+      .new-chat-top-btn {
         padding: 9px 12px;
       }
-      .export-btn span {
+      .new-chat-top-btn span {
         display: none;
       }
       .bottom-wrap {
         padding:
-          0 12px 14px;
+          0 12px 18px;
       }
       .topbar {
         padding:
           12px 14px;
-      }
-      .cards-row {
-        display: flex;
-        flex-direction: row;
-        gap: 8px;
-        margin-top: 10px;
-        width: 100%;
-      }
-      .card {
-        flex: 1 1 0;
-        min-width: 0;
-        padding: 10px;
-        border-radius: 14px;
-      }
-      .card:hover {
-        transform: none;
-      }
-      .card-icon {
-        width: 30px;
-        height: 30px;
-        margin-bottom: 7px;
-        border-radius: 9px;
-      }
-      .card-icon svg {
-        width: 15px;
-        height: 15px;
-      }
-      .card h3 {
-        margin-bottom: 3px;
-        font-size: 11.5px;
-        line-height: 1.25;
-      }
-      .card p {
-        font-size: 10px;
-        line-height: 1.35;
-        overflow-wrap: anywhere;
       }
       .input-card {
         padding: 14px 12px 12px;
@@ -1111,28 +1017,6 @@
       }
       .bottom-wrap {
         padding:
-          0 8px 10px;
-      }
-      .cards-row {
-        gap: 6px;
-      }
-      .card {
-        padding: 8px;
-        border-radius: 12px;
-      }
-      .card-icon {
-        width: 27px;
-        height: 27px;
-        margin-bottom: 6px;
-      }
-      .card-icon svg {
-        width: 14px;
-        height: 14px;
-      }
-      .card h3 {
-        font-size: 10.5px;
-      }
-      .card p {
-        font-size: 9px;
+          0 8px 16px;
       }
     }

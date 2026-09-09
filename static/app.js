@@ -7,40 +7,67 @@ const NVIDIA_CONFIG = {
   enableThinking: true
 };
 
-let historyItems = [
-  {
-    id: 1,
-    text: "Landing page for coffee shop",
-    pinned: false
-  },
-  {
-    id: 2,
-    text: "React hooks explained simply",
-    pinned: true
-  },
-  {
-    id: 3,
-    text: "Marketing email for SaaS launch",
-    pinned: false
-  },
-  {
-    id: 4,
-    text: "SQL query optimization tips",
-    pinned: false
-  },
-  {
-    id: 5,
-    text: "Midnight in Tokyo — poem",
-    pinned: false
-  },
-  {
-    id: 6,
-    text: "Startup pitch deck outline",
-    pinned: false
-  }
-];
+const STORAGE_KEY = "nexaai.chat.history.v1";
 
+function createChatId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+
+  return `chat_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizeChatItem(item) {
+  const messages = Array.isArray(item.messages)
+    ? item.messages.map(message => ({
+        role: message?.role === "assistant" ? "assistant" : "user",
+        content: String(message?.content || ""),
+        createdAt: message?.createdAt || new Date().toISOString()
+      }))
+    : [];
+
+  return {
+    id: item?.id || createChatId(),
+    title: item?.title || item?.text || "New chat",
+    pinned: Boolean(item?.pinned),
+    createdAt: item?.createdAt || new Date().toISOString(),
+    updatedAt: item?.updatedAt || new Date().toISOString(),
+    messages
+  };
+}
+
+function loadStoredHistory() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.map(normalizeChatItem);
+  } catch (error) {
+    console.warn("Unable to read saved chats:", error);
+    return [];
+  }
+}
+
+function saveHistoryToStorage() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(historyItems));
+  } catch (error) {
+    console.warn("Unable to save chats:", error);
+  }
+}
+
+let historyItems = loadStoredHistory();
 let activeMenuId = null;
+let currentChatId = null;
 let currentChatTitle = null;
 let toastTimer;
 let isGenerating = false;
@@ -102,19 +129,111 @@ $("planLink").onclick = event => {
   showToast("Upgrade to Pro — $19/month ✦");
 };
 
+function deriveChatTitle(messages) {
+  const firstUserMessage = messages.find(message => message.role === "user");
+
+  if (!firstUserMessage?.content) {
+    return "New chat";
+  }
+
+  const title = String(firstUserMessage.content).trim();
+
+  return title.slice(0, 32) + (title.length > 32 ? "…" : "");
+}
+
+function persistCurrentChatState() {
+  if (!currentChatId) {
+    currentChatId = createChatId();
+  }
+
+  const safeMessages = conversationMessages.map(message => ({
+    ...message,
+    createdAt: message.createdAt || new Date().toISOString()
+  }));
+
+  const nextTitle = currentChatTitle || deriveChatTitle(safeMessages);
+
+  let activeChat = historyItems.find(chat => chat.id === currentChatId);
+
+  if (!activeChat) {
+    activeChat = {
+      id: currentChatId,
+      title: nextTitle,
+      pinned: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messages: safeMessages
+    };
+
+    historyItems.unshift(activeChat);
+  } else {
+    activeChat.title = nextTitle;
+    activeChat.messages = safeMessages;
+    activeChat.updatedAt = new Date().toISOString();
+  }
+
+  currentChatTitle = nextTitle;
+
+  saveHistoryToStorage();
+  renderHistory();
+}
+
+function renderConversation() {
+  chatInner.innerHTML = "";
+
+  if (!conversationMessages.length) {
+    chatInner.innerHTML = `
+      <div class="empty-state" id="emptyState">
+        <div class="orb"></div>
+
+        <h1>
+          Hello, I'm
+          <span>NexaAI</span>
+        </h1>
+
+        <p>
+          Your intelligent creative partner.
+          Ask me anything — generate images,
+          build presentations, or get help with code.
+        </p>
+      </div>
+    `;
+    return;
+  }
+
+  conversationMessages.forEach(message => {
+    const sender = message.role === "assistant" ? "ai" : "user";
+    const renderedMessage = addMessage(message.content, sender);
+
+    if (sender === "ai") {
+      setupAIMessageActions(renderedMessage);
+    }
+  });
+
+  chatScroll.scrollTop = chatScroll.scrollHeight;
+}
+
 function renderHistory() {
   const historyList = $("historyList");
 
   historyList.innerHTML = "";
 
   const sortedHistory = [...historyItems].sort((a, b) => {
-    return Number(b.pinned) - Number(a.pinned);
+    if (Number(b.pinned) !== Number(a.pinned)) {
+      return Number(b.pinned) - Number(a.pinned);
+    }
+
+    return new Date(b.updatedAt) - new Date(a.updatedAt);
   });
 
   sortedHistory.forEach(item => {
     const historyItem = document.createElement("div");
 
     historyItem.className = "hist-item";
+
+    if (currentChatId === item.id) {
+      historyItem.classList.add("active");
+    }
 
     historyItem.innerHTML = `
       ${
@@ -130,7 +249,7 @@ function renderHistory() {
       }
 
       <span class="hist-text">
-        ${escapeHTML(item.text)}
+        ${escapeHTML(item.title || "New chat")}
       </span>
 
       <button class="hist-dots" title="More">
@@ -155,15 +274,93 @@ function renderHistory() {
     };
 
     historyItem.onclick = () => {
-      showToast(`Opened: ${item.text}`);
-      closeAllMenus();
+      loadChatById(item.id);
     };
 
     historyList.appendChild(historyItem);
   });
 }
 
+function loadChatById(chatId) {
+  const chat = historyItems.find(item => item.id === chatId);
+
+  if (!chat) {
+    return;
+  }
+
+  currentChatId = chat.id;
+  currentChatTitle = chat.title || "New chat";
+  conversationMessages = chat.messages.map(message => ({
+    ...message,
+    createdAt: message.createdAt || new Date().toISOString()
+  }));
+
+  renderConversation();
+  renderHistory();
+  closeAllMenus();
+  showToast(`Opened: ${currentChatTitle}`);
+}
+
+function addNewChatButton() {
+  const sidebar = $("sidebar");
+  const existingButton = $("newChatBtn");
+
+  if (existingButton) {
+    return;
+  }
+
+  const button = document.createElement("button");
+
+  button.id = "newChatBtn";
+  button.className = "new-chat-btn";
+  button.type = "button";
+  button.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+    <span>New Chat</span>
+  `;
+
+  button.onclick = () => {
+    startNewChat();
+  };
+
+  button.style.cssText = `
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin: 14px;
+    padding: 12px 16px;
+    border: 1px solid rgba(124, 58, 237, 0.45);
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(124, 58, 237, 0.22), rgba(124, 58, 237, 0.08));
+    color: #fff;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 700;
+    transition: 0.25s;
+    box-shadow: 0 10px 22px rgba(124, 58, 237, 0.18);
+  `;
+
+  button.onmouseover = () => {
+    button.style.transform = "translateY(-1px)";
+    button.style.boxShadow = "0 14px 28px rgba(124, 58, 237, 0.25)";
+  };
+
+  button.onmouseout = () => {
+    button.style.transform = "none";
+    button.style.boxShadow = "0 10px 22px rgba(124, 58, 237, 0.18)";
+  };
+
+  button.querySelector("svg").style.cssText = "width: 16px; height: 16px;";
+
+  sidebar.appendChild(button);
+}
+
 renderHistory();
+addNewChatButton();
 
 function openHistoryMenu(anchor, item) {
   activeMenuId = item.id;
@@ -209,22 +406,40 @@ function openHistoryMenu(anchor, item) {
 
         const newName = prompt(
           "Rename chat:",
-          history.text
+          history?.title || history?.text || "New chat"
         );
 
         if (newName && newName.trim()) {
-          history.text = newName.trim();
+          if (history) {
+            history.title = newName.trim();
+            history.updatedAt = new Date().toISOString();
+            saveHistoryToStorage();
+          }
+
+          if (currentChatId === item.id) {
+            currentChatTitle = newName.trim();
+          }
+
           renderHistory();
           showToast("Chat renamed");
         }
       }
 
       if (action === "pin") {
-        item.pinned = !item.pinned;
+        const history = historyItems.find(
+          historyItem => historyItem.id === item.id
+        );
+
+        if (history) {
+          history.pinned = !history.pinned;
+          history.updatedAt = new Date().toISOString();
+          saveHistoryToStorage();
+        }
+
         renderHistory();
 
         showToast(
-          item.pinned
+          history?.pinned
             ? "Pinned to top"
             : "Unpinned"
         );
@@ -235,6 +450,14 @@ function openHistoryMenu(anchor, item) {
           historyItem => historyItem.id !== item.id
         );
 
+        if (currentChatId === item.id) {
+          currentChatId = null;
+          currentChatTitle = null;
+          conversationMessages = [];
+          renderConversation();
+        }
+
+        saveHistoryToStorage();
         renderHistory();
         showToast("Chat deleted");
       }
@@ -327,15 +550,14 @@ input.addEventListener("keydown", event => {
 
 sendBtn.onclick = sendMessage;
 
-document.querySelectorAll(".card").forEach(card => {
-  card.onclick = () => {
-    input.value = card.dataset.card;
+const newChatButtons = [
+  document.getElementById("newChatTopBtn"),
+  document.getElementById("newChatBtn")
+].filter(Boolean);
 
-    input.dispatchEvent(
-      new Event("input")
-    );
-
-    input.focus();
+newChatButtons.forEach(button => {
+  button.onclick = () => {
+    startNewChat();
   };
 });
 
@@ -566,15 +788,7 @@ function createNvidiaRequestBody() {
     temperature: NVIDIA_CONFIG.temperature,
     top_p: NVIDIA_CONFIG.topP,
     max_tokens: NVIDIA_CONFIG.maxTokens,
-    stream: true,
-
-    extra_body: {
-      chat_template_kwargs: {
-        enable_thinking: NVIDIA_CONFIG.enableThinking
-      },
-
-      reasoning_budget: NVIDIA_CONFIG.reasoningBudget
-    }
+    stream: true
   };
 }
 
@@ -596,25 +810,20 @@ async function sendMessage() {
 
   conversationMessages.push({
     role: "user",
-    content: messageText
+    content: messageText,
+    createdAt: new Date().toISOString()
   });
 
   input.value = "";
   input.style.height = "auto";
 
-  if (!currentChatTitle) {
+  if (!currentChatId) {
     currentChatTitle =
       messageText.slice(0, 32) +
       (messageText.length > 32 ? "…" : "");
-
-    historyItems.unshift({
-      id: Date.now(),
-      text: currentChatTitle,
-      pinned: false
-    });
-
-    renderHistory();
   }
+
+  persistCurrentChatState();
 
   const typingMessage = addMessage("", "ai");
 
@@ -840,8 +1049,11 @@ async function sendMessage() {
 
     conversationMessages.push({
       role: "assistant",
-      content: assistantText
+      content: assistantText,
+      createdAt: new Date().toISOString()
     });
+
+    persistCurrentChatState();
 
     setupAIMessageActions(
       typingMessage
@@ -875,6 +1087,8 @@ async function sendMessage() {
     ) {
       conversationMessages.pop();
     }
+
+    persistCurrentChatState();
 
     setupAIMessageActions(
       typingMessage
@@ -963,28 +1177,13 @@ function startNewChat() {
     } catch (error) {}
   }
 
+  currentChatId = null;
+  currentChatTitle = null;
   conversationMessages = [];
 
   isGenerating = false;
 
-  chatInner.innerHTML = `
-    <div class="empty-state" id="emptyState">
-      <div class="orb"></div>
-
-      <h1>
-        Hello, I'm
-        <span>NexaAI</span>
-      </h1>
-
-      <p>
-        Your intelligent creative partner.
-        Ask me anything — generate images,
-        build presentations, or get help with code.
-      </p>
-    </div>
-  `;
-
-  currentChatTitle = null;
+  renderConversation();
 
   input.value = "";
   input.style.height = "auto";
@@ -1139,70 +1338,6 @@ $("micBtn").onclick = () => {
   }
 };
 
-$("exportBtn").onclick = () => {
-  const messages = [
-    ...document.querySelectorAll(".msg")
-  ];
-
-  if (!messages.length) {
-    showToast("Nothing to export yet");
-    return;
-  }
-
-  const conversationText =
-    messages
-      .map(message => {
-        const sender =
-          message.classList.contains("ai")
-            ? "NexaAI"
-            : "You";
-
-        const bubble =
-          message.querySelector(".bubble");
-
-        const text =
-          bubble
-            ? bubble.textContent
-            : "";
-
-        return `${sender}: ${text}`;
-      })
-      .join("\n\n");
-
-  const file =
-    new Blob(
-      [conversationText],
-      {
-        type: "text/plain"
-      }
-    );
-
-  const downloadUrl =
-    URL.createObjectURL(file);
-
-  const downloadLink =
-    document.createElement("a");
-
-  downloadLink.href =
-    downloadUrl;
-
-  downloadLink.download =
-    "nexaai-chat.txt";
-
-  document.body.appendChild(
-    downloadLink
-  );
-
-  downloadLink.click();
-
-  downloadLink.remove();
-
-  URL.revokeObjectURL(
-    downloadUrl
-  );
-
-  showToast("Chat exported ✦");
-};
 
 function showToast(message) {
   const toast = $("toast");

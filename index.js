@@ -68,8 +68,7 @@ app.post(
         temperature,
         top_p,
         max_tokens,
-        stream,
-        extra_body
+        stream
       } = req.body;
 
 
@@ -149,17 +148,7 @@ app.post(
                 max_tokens ?? 16384,
 
               stream:
-                stream !== false,
-
-              extra_body:
-                extra_body || {
-                  chat_template_kwargs: {
-                    enable_thinking: true
-                  },
-
-                  reasoning_budget:
-                    16384
-                }
+                stream !== false
 
             })
 
@@ -288,29 +277,17 @@ app.post(
 
     } catch (error) {
       console.error("Backend error:", error);
-      console.error("Cause:", error.cause);   // <-- yeh line add karo
-      ...
-    }
+      console.error("Cause:", error?.cause);
 
-
-      if (
-        !res.headersSent
-      ) {
-
+      if (!res.headersSent) {
         res.status(500).json({
           error: {
-            message:
-              error.message ||
-              "Internal server error"
+            message: error?.message || "Internal server error"
           }
         });
-
       } else {
-
         res.end();
-
       }
-
     }
 
   }
