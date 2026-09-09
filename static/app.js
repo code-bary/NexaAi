@@ -83,6 +83,58 @@ const chatInner = $("chatInner");
 const chatScroll = $("chatScroll");
 const histMenu = $("histMenu");
 const modelMenu = $("modelMenu");
+const bottomWrap = document.querySelector(".bottom-wrap");
+
+function syncBottomInputPosition() {
+  if (!bottomWrap || window.innerWidth > 768) {
+    document.documentElement.style.setProperty("--keyboard-offset", "0px");
+    bottomWrap && (bottomWrap.style.transform = "translateY(0)");
+    return;
+  }
+
+  if (!window.visualViewport) {
+    document.documentElement.style.setProperty("--keyboard-offset", "0px");
+    bottomWrap.style.transform = "translateY(0)";
+    return;
+  }
+
+  const viewportHeight = window.visualViewport.height;
+  const keyboardOffset = Math.max(
+    0,
+    window.innerHeight - viewportHeight - (window.visualViewport.offsetTop || 0)
+  );
+
+  document.documentElement.style.setProperty(
+    "--keyboard-offset",
+    `${Math.max(0, keyboardOffset)}px`
+  );
+
+  if (keyboardOffset > 0) {
+    bottomWrap.style.transform = `translateY(-${keyboardOffset}px)`;
+    if (document.activeElement === input) {
+      input.scrollIntoView({
+        behavior: "smooth",
+        block: "end"
+      });
+    }
+    return;
+  }
+
+  bottomWrap.style.transform = "translateY(0)";
+}
+
+window.visualViewport?.addEventListener("resize", syncBottomInputPosition);
+window.visualViewport?.addEventListener("scroll", syncBottomInputPosition);
+window.addEventListener("resize", syncBottomInputPosition);
+
+input.addEventListener("focus", () => {
+  window.requestAnimationFrame(syncBottomInputPosition);
+});
+
+input.addEventListener("blur", () => {
+  document.documentElement.style.setProperty("--keyboard-offset", "0px");
+  bottomWrap && (bottomWrap.style.transform = "translateY(0)");
+});
 
 $("collapseBtn").onclick = () => {
   if (window.innerWidth <= 768) {
