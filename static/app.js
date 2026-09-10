@@ -621,6 +621,309 @@ function removeEmptyState() {
   }
 }
 
+function escapeHTML(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function escapeAttribute(value) {
+  return escapeHTML(value).replace(/\"/g, "&quot;");
+}
+
+function renderInlineMarkdown(value) {
+  let html = escapeHTML(value);
+
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__(.+?)__/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+  html = html.replace(/(^|[^_])_([^_]+)_(?!_)/g, "$1<em>$2</em>");
+  html = html.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+  );
+
+  return html;
+}
+
+function renderMarkdownBlocks(text) {
+  const safeText = String(text ?? "").replace(/\r\n/g, "\n").trim();
+
+  if (!safeText) {
+    return "";
+  }
+
+  const blocks = safeText.split(/\n\s*\n/);
+
+  return blocks
+    .map(block => {
+      const trimmed = block.trim();
+
+      if (!trimmed) {
+        return "";
+      }
+
+      const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+
+      if (headingMatch) {
+        const level = headingMatch[1].length;
+        const content = headingMatch[2].trim();
+
+        return `<h${level} class="markdown-heading">${renderInlineMarkdown(content)}</h${level}>`;
+      }
+
+      const listLines = trimmed
+        .split(/\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+
+      if (listLines.length && listLines.every(line => /^[-*+]\s+/.test(line) || /^\d+\.\s+/.test(line))) {
+        const ordered = listLines.every(line => /^\d+\.\s+/.test(line));
+        const tag = ordered ? "ol" : "ul";
+        const items = listLines
+          .map(line => {
+            const content = ordered
+              ? line.replace(/^\d+\.\s+/, "")
+              : line.replace(/^[-*+]\s+/, "");
+
+            return `<li>${renderInlineMarkdown(content)}</li>`;
+          })
+          .join("");
+
+        return `<${tag} class="markdown-list">${items}</${tag}>`;
+      }
+
+      return `<p class="markdown-paragraph">${renderInlineMarkdown(trimmed).replace(/\n/g, "<br>")}</p>`;
+    })
+    .join("");
+}
+
+function highlightCode(code, language) {
+  let html = escapeHTML(code);
+  const normalizedLanguage = String(language || "code").toLowerCase();
+
+  html = html
+    .replace(/(\/\*[\s\S]*?\*\/|\/\/.*$)/gm, '<span class="token comment">$1</span>')
+    .replace(/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g, '<span class="token string">$1</span>')
+    .replace(/\b(true|false|null|undefined|const|let|var|function|return|if|else|for|while|switch|case|break|continue|class|import|from|export|default|new|try|catch|await|async|typeof|in|of|extends|implements|interface|public|private|protected|package|def|print|len|None|True|False|elif|and|or|not|yield|pass|raise|finally|with|as|match|case|do|while|throw|super|this|document|window|console)\b/g, '<span class="token keyword">$1</span>')
+    .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="token number">$1</span>')
+    .replace(/(&(?:amp|lt|gt|quot|#039);)/g, '$1');
+
+  if (normalizedLanguage.includes("html") || normalizedLanguage.includes("xml") || normalizedLanguage.includes("svg")) {
+    html = html.replace(/(&lt;\/?[A-Za-z][^&]*?&gt;)/g, '<span class="token tag">$1</span>');
+  }
+
+  if (normalizedLanguage.includes("css") || normalizedLanguage.includes("scss") || normalizedLanguage.includes("less")) {
+    html = html.replace(/([.#]?[A-Za-z_-][\w-]*)(\s*\{)/g, '<span class="token selector">$1</span>$2');
+    html = html.replace(/(#[0-9a-fA-F]{3,8}|\b(?:auto|inherit|initial|none|block|flex|grid|absolute|relative|fixed|sticky|transparent|solid|dashed|pointer)\b)/g, '<span class="token value">$1</span>');
+  }
+
+  if (normalizedLanguage.includes("json") || normalizedLanguage.includes("yaml") || normalizedLanguage.includes("toml")) {
+    html = html.replace(/("[^"]+")\s*:/g, '<span class="token key">$1</span> :');
+  }
+
+  if (normalizedLanguage.includes("sql")) {
+    html = html.replace(/\b(SELECT|FROM|WHERE|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TABLE|VIEW|JOIN|LEFT|RIGHT|INNER|OUTER|ON|AS|GROUP|BY|ORDER|LIMIT|HAVING|UNION|VALUES|COUNT|SUM|AVG|MIN|MAX)\b/gi, '<span class="token keyword">$1</span>');
+  }
+
+  return html;
+}
+
+function renderCodeBlock(rawBlock) {
+  const match = rawBlock.match(/^```([^\n\r]*)\n([\s\S]*?)\n?```$/);
+
+  if (!match) {
+    return "";
+  }
+
+  const language = (match[1] || "code").trim() || "code";
+  const code = match[2].replace(/\r\n/g, "\n");
+  const highlighted = highlightCode(code, language);
+
+  return `
+    <div class="code-block-shell">
+      <div class="code-block-header">
+        <span class="code-language">${escapeHTML(language)}</span>
+        <button
+          type="button"
+          class="code-copy-btn"
+          data-copy-text="${escapeAttribute(code)}"
+          aria-label="Copy code"
+        >Copy</button>
+      </div>
+      <pre class="code-pre"><code class="language-${escapeAttribute(language)}">${highlighted}</code></pre>
+    </div>
+  `;
+}
+
+function parseWritingAttributes(attributeString) {
+  const attributes = {};
+  const regex = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+  let match;
+
+  while ((match = regex.exec(attributeString))) {
+    const key = match[1].toLowerCase();
+    const value = match[2] || match[3] || match[4] || "";
+    attributes[key] = value;
+  }
+
+  return attributes;
+}
+
+function getWritingLabel(variant) {
+  const normalized = String(variant || "writing").trim().toLowerCase();
+  const labels = {
+    email: "Email",
+    prompt: "Prompt",
+    script: "Script",
+    message: "Message",
+    "social media post": "Social Post",
+    "social-post": "Social Post",
+    "social": "Social Post",
+    letter: "Letter",
+    application: "Application",
+    notice: "Notice",
+    bio: "Bio",
+    article: "Article",
+    report: "Report",
+    "professional letter": "Professional Letter"
+  };
+
+  if (labels[normalized]) {
+    return labels[normalized];
+  }
+
+  return normalized
+    .split(/[-\s]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ") || "Writing";
+}
+
+function renderWritingBlock(rawBlock) {
+  const match = rawBlock.match(/^:::writing\s*\{([\s\S]*?)\}\s*([\s\S]*?)\s*:::/);
+
+  if (!match) {
+    return "";
+  }
+
+  const attributes = parseWritingAttributes(match[1]);
+  const variant = attributes.variant || "writing";
+  const title = attributes.title || getWritingLabel(variant);
+  const content = (match[2] || "").trim();
+
+  return `
+    <div class="writing-block-shell">
+      <div class="writing-block-header">
+        <div class="writing-block-label">
+          <span class="writing-block-icon">✎</span>
+          <span>${escapeHTML(getWritingLabel(variant))}</span>
+        </div>
+        <button
+          type="button"
+          class="writing-copy-btn"
+          data-copy-text="${escapeAttribute(content)}"
+          aria-label="Copy writing"
+        >Copy</button>
+      </div>
+      <div class="writing-block-title">${escapeHTML(title)}</div>
+      <div class="writing-block-body">${renderMarkdownContent(content)}</div>
+    </div>
+  `;
+}
+
+function renderMarkdownContent(rawText) {
+  const source = String(rawText ?? "").replace(/\r\n/g, "\n");
+
+  if (!source.trim()) {
+    return "";
+  }
+
+  const tokenRegex = /```[\s\S]*?```|:::writing\s*\{[^}]*\}[\s\S]*?:::/g;
+  const output = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = tokenRegex.exec(source)) !== null) {
+    const token = match[0];
+
+    if (match.index > lastIndex) {
+      const plainText = source.slice(lastIndex, match.index);
+
+      if (plainText.trim()) {
+        output.push(renderMarkdownBlocks(plainText));
+      }
+    }
+
+    if (token.startsWith("```")) {
+      output.push(renderCodeBlock(token));
+    } else if (token.startsWith(":::writing")) {
+      output.push(renderWritingBlock(token));
+    }
+
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < source.length) {
+    const trailingText = source.slice(lastIndex);
+
+    if (trailingText.trim()) {
+      output.push(renderMarkdownBlocks(trailingText));
+    }
+  }
+
+  const html = output.join("");
+
+  if (html) {
+    return html;
+  }
+
+  return `<p class="markdown-paragraph">${renderInlineMarkdown(source.trim())}</p>`;
+}
+
+function bindMessageCopyButtons(container) {
+  container.querySelectorAll(".code-copy-btn, .writing-copy-btn").forEach(button => {
+    button.onclick = async () => {
+      const text = button.dataset.copyText || "";
+
+      if (!text.trim()) {
+        showToast("Nothing to copy");
+        return;
+      }
+
+      const originalText = button.textContent;
+
+      try {
+        await navigator.clipboard.writeText(text);
+        button.textContent = "Copied";
+        button.classList.add("copied");
+        setTimeout(() => {
+          button.textContent = originalText;
+          button.classList.remove("copied");
+        }, 1200);
+      } catch (error) {
+        const temp = document.createElement("textarea");
+
+        temp.value = text;
+        document.body.appendChild(temp);
+        temp.select();
+        document.execCommand("copy");
+        temp.remove();
+        button.textContent = "Copied";
+        button.classList.add("copied");
+        setTimeout(() => {
+          button.textContent = originalText;
+          button.classList.remove("copied");
+        }, 1200);
+      }
+    };
+  });
+}
+
 function addMessage(text, sender) {
   removeEmptyState();
 
@@ -630,10 +933,6 @@ function addMessage(text, sender) {
 
   if (sender === "ai") {
     message.innerHTML = `
-      <div class="avatar ai">
-        N
-      </div>
-
       <div class="ai-response-content">
         <div class="bubble"></div>
 
@@ -715,17 +1014,18 @@ function addMessage(text, sender) {
     `;
   } else {
     message.innerHTML = `
-      <div class="avatar user">
-        You
-      </div>
-
       <div class="bubble"></div>
     `;
   }
 
   const bubble = message.querySelector(".bubble");
 
-  bubble.textContent = text;
+  if (sender === "ai") {
+    bubble.dataset.rawText = String(text ?? "");
+    bubble.innerHTML = renderMarkdownContent(text);
+  } else {
+    bubble.textContent = text;
+  }
 
   if (sender === "ai") {
     setupAIMessageActions(message);
@@ -745,8 +1045,10 @@ function setupAIMessageActions(message) {
   const dislikeBtn = message.querySelector(".response-dislike");
   const speakBtn = message.querySelector(".response-speak");
 
+  bindMessageCopyButtons(message);
+
   copyBtn.onclick = async () => {
-    const text = bubble.textContent.trim();
+    const text = bubble.dataset.rawText?.trim() || bubble.textContent.trim();
 
     if (!text) {
       showToast("Nothing to copy");
@@ -755,6 +1057,12 @@ function setupAIMessageActions(message) {
 
     try {
       await navigator.clipboard.writeText(text);
+      copyBtn.classList.add("active");
+      copyBtn.title = "Copied";
+      setTimeout(() => {
+        copyBtn.classList.remove("active");
+        copyBtn.title = "Copy";
+      }, 1200);
       showToast("Copied to clipboard");
     } catch (error) {
       const temp = document.createElement("textarea");
@@ -766,7 +1074,12 @@ function setupAIMessageActions(message) {
       document.execCommand("copy");
 
       temp.remove();
-
+      copyBtn.classList.add("active");
+      copyBtn.title = "Copied";
+      setTimeout(() => {
+        copyBtn.classList.remove("active");
+        copyBtn.title = "Copy";
+      }, 1200);
       showToast("Copied to clipboard");
     }
   };
@@ -893,6 +1206,7 @@ async function sendMessage() {
 
   let assistantText = "";
   let reasoningText = "";
+  let hasStartedStreamingResponse = false;
 
   try {
     /*
@@ -1033,13 +1347,20 @@ async function sendMessage() {
 
         if (
           typeof delta.content ===
-          "string"
+            "string" &&
+          delta.content.length > 0
         ) {
+          if (!hasStartedStreamingResponse) {
+            hasStartedStreamingResponse = true;
+          }
+
           assistantText +=
             delta.content;
 
-          bubble.textContent =
+          bubble.dataset.rawText =
             assistantText;
+          bubble.innerHTML =
+            renderMarkdownContent(assistantText);
 
           chatScroll.scrollTop =
             chatScroll.scrollHeight;
@@ -1070,13 +1391,20 @@ async function sendMessage() {
 
             if (
               typeof delta?.content ===
-              "string"
+                "string" &&
+              delta.content.length > 0
             ) {
+              if (!hasStartedStreamingResponse) {
+                hasStartedStreamingResponse = true;
+              }
+
               assistantText +=
                 delta.content;
 
-              bubble.textContent =
+              bubble.dataset.rawText =
                 assistantText;
+              bubble.innerHTML =
+                renderMarkdownContent(assistantText);
             }
 
             if (
@@ -1095,8 +1423,10 @@ async function sendMessage() {
       assistantText =
         "I couldn't generate a response. Please try again.";
 
-      bubble.textContent =
+      bubble.dataset.rawText =
         assistantText;
+      bubble.innerHTML =
+        renderMarkdownContent(assistantText);
     }
 
     conversationMessages.push({
@@ -1123,8 +1453,10 @@ async function sendMessage() {
     const errorMessage =
       getReadableAPIError(error);
 
-    bubble.textContent =
+    bubble.dataset.rawText =
       errorMessage;
+    bubble.innerHTML =
+      renderMarkdownContent(errorMessage);
 
     /*
      * Remove the latest user message
@@ -1408,16 +1740,6 @@ function showToast(message) {
       },
       2200
     );
-}
-
-function escapeHTML(value) {
-  const div =
-    document.createElement("div");
-
-  div.textContent =
-    value;
-
-  return div.innerHTML;
 }
 
 sendBtn.disabled =
