@@ -791,7 +791,7 @@
       }
     }
     /* 29.5. AI MESSAGE ACTIONS */
-    .ai-message-actions hidden {
+    .ai-message-actions {
       display: flex;
       align-items: center;
       gap: 5px;
