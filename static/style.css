@@ -791,12 +791,15 @@
       }
     }
     /* 29.5. AI MESSAGE ACTIONS */
-    .ai-message-actions {
+    .ai-message-actions hidden {
       display: flex;
       align-items: center;
       gap: 5px;
       margin-top: 7px;
       padding-left: 2px;
+    }
+    .ai-message-actions.hidden {
+      display: none;
     }
     .ai-action-btn {
       width: 32px;
