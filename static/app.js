@@ -1273,8 +1273,6 @@ async function sendMessage() {
 
     let buffer = "";
 
-    bubble.textContent = "";
-
     while (true) {
       const { value, done } =
         await reader.read();
@@ -1352,6 +1350,7 @@ async function sendMessage() {
         ) {
           if (!hasStartedStreamingResponse) {
             hasStartedStreamingResponse = true;
+            bubble.innerHTML = "";
           }
 
           assistantText +=
