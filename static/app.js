@@ -1351,6 +1351,9 @@ async function sendMessage() {
           if (!hasStartedStreamingResponse) {
             hasStartedStreamingResponse = true;
             bubble.innerHTML = "";
+
+            const actions = typingMessage.querySelector(".ai-message-actions");
+            if (actions) actions.classList.remove("hidden");
           }
 
           assistantText +=
