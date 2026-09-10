@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NexaAI — Chat</title>
+  <title>NexaAI </title>
   <link rel="stylesheet" href="/static/style.css"/>
 </head>
 <body>
@@ -328,8 +328,10 @@
       <!-- BOTTOM INPUT AREA -->
       <div class="bottom-wrap">
         <div class="bottom-inner">
+          
           <!-- CHAT INPUT -->
           <div class="input-card">
+            <div class="attachment-box" id="attachmentBox"></div>
             <textarea
               id="chatInput"
               rows="1"
@@ -440,6 +442,7 @@
                   class="send-btn"
                   id="sendBtn"
                   title="Send"
+                  aria-label="Send"
                   disabled
                 >
                   <svg
@@ -449,6 +452,7 @@
                     stroke-width="2.2"
                     stroke-linecap="round"
                     stroke-linejoin="round"
+                    aria-hidden="true"
                   >
                     <path d="M5 12h14" />
                     <path d="M12 5l7 7-7 7" />
@@ -461,6 +465,7 @@
           <input
             type="file"
             id="fileInput"
+            accept="image/*,.pdf,.txt,.doc,.docx,.rtf,.csv,.xlsx,.xls,.ppt,.pptx,.md"
             hidden
             multiple
           >

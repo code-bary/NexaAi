@@ -2,8 +2,8 @@ const NVIDIA_CONFIG = {
   model: "nvidia/nemotron-3.5-lightning-30b-a3b",
   temperature: 1,
   topP: 0.95,
-  maxTokens: 16384,
-  reasoningBudget: 16384,
+  maxTokens: 8192,
+  reasoningBudget: 4096,
   enableThinking: true
 };
 
@@ -22,6 +22,16 @@ function normalizeChatItem(item) {
     ? item.messages.map(message => ({
         role: message?.role === "assistant" ? "assistant" : "user",
         content: String(message?.content || ""),
+        attachments: Array.isArray(message?.attachments)
+          ? message.attachments.map(attachment => ({
+              id: attachment?.id || createChatId(),
+              name: attachment?.name || "attachment",
+              type: attachment?.type || "application/octet-stream",
+              size: Number(attachment?.size || 0),
+              kind: attachment?.kind === "image" ? "image" : "file",
+              data: attachment?.data || ""
+            }))
+          : [],
         createdAt: message?.createdAt || new Date().toISOString()
       }))
     : [];
@@ -71,7 +81,11 @@ let currentChatId = null;
 let currentChatTitle = null;
 let toastTimer;
 let isGenerating = false;
+let pendingAttachments = [];
 let conversationMessages = [];
+let activeRequestController = null;
+let activeTypingMessage = null;
+let activeResponseBubble = null;
 
 const $ = id => document.getElementById(id);
 
@@ -79,10 +93,12 @@ const sidebar = $("sidebar");
 const overlay = $("overlay");
 const input = $("chatInput");
 const sendBtn = $("sendBtn");
+const fileInput = $("fileInput");
 const chatInner = $("chatInner");
 const chatScroll = $("chatScroll");
 const histMenu = $("histMenu");
 const modelMenu = $("modelMenu");
+const attachmentBox = $("attachmentBox");
 const bottomWrap = document.querySelector(".bottom-wrap");
 
 function syncBottomInputPosition() {
@@ -136,7 +152,9 @@ input.addEventListener("blur", () => {
   bottomWrap && (bottomWrap.style.transform = "translateY(0)");
 });
 
-$("collapseBtn").onclick = () => {
+$("collapseBtn").onclick = event => {
+  event.stopPropagation();
+
   if (window.innerWidth <= 768) {
     sidebar.classList.remove("mobile-open");
     overlay.classList.remove("show");
@@ -144,6 +162,25 @@ $("collapseBtn").onclick = () => {
     sidebar.classList.toggle("collapsed");
   }
 };
+
+document.querySelector(".logo").addEventListener("click", event => {
+  if (window.innerWidth > 768 && sidebar.classList.contains("collapsed")) {
+    event.preventDefault();
+    sidebar.classList.remove("collapsed");
+  }
+});
+
+sidebar.addEventListener("click", event => {
+  if (window.innerWidth <= 768 || !sidebar.classList.contains("collapsed")) {
+    return;
+  }
+
+  if (event.target.closest("#collapseBtn")) {
+    return;
+  }
+
+  sidebar.classList.remove("collapsed");
+});
 
 $("hamburgerBtn").onclick = () => {
   sidebar.classList.add("mobile-open");
@@ -255,7 +292,11 @@ function renderConversation() {
 
   conversationMessages.forEach(message => {
     const sender = message.role === "assistant" ? "ai" : "user";
-    const renderedMessage = addMessage(message.content, sender);
+    const renderedMessage = addMessage(
+      message.content,
+      sender,
+      Array.isArray(message.attachments) ? message.attachments : []
+    );
 
     if (sender === "ai") {
       setupAIMessageActions(renderedMessage);
@@ -580,6 +621,45 @@ modelMenu.querySelectorAll(".drop-item").forEach(button => {
   };
 });
 
+function getSendButtonIconSvg(isStopMode = false) {
+  if (isStopMode) {
+    return `
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <rect x="5" y="5" width="14" height="14" rx="2"></rect>
+      </svg>
+    `;
+  }
+
+  return `
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M5 12h14" />
+      <path d="M12 5l7 7-7 7" />
+    </svg>
+  `;
+}
+
+function updateSendButtonState() {
+  if (!sendBtn) {
+    return;
+  }
+
+  const shouldStop = Boolean(isGenerating);
+
+  sendBtn.disabled = !shouldStop && !input.value.trim() && pendingAttachments.length === 0;
+  sendBtn.title = shouldStop ? "Stop" : "Send";
+  sendBtn.setAttribute("aria-label", shouldStop ? "Stop" : "Send");
+  sendBtn.classList.toggle("stop-mode", shouldStop);
+  sendBtn.innerHTML = getSendButtonIconSvg(shouldStop);
+}
+
 input.addEventListener("input", () => {
   input.style.height = "auto";
 
@@ -588,19 +668,28 @@ input.addEventListener("input", () => {
     150
   )}px`;
 
-  sendBtn.disabled =
-    !input.value.trim() ||
-    isGenerating;
+  updateSendButtonState();
 });
 
 input.addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
+    if (isGenerating) {
+      stopGeneration();
+      return;
+    }
     sendMessage();
   }
 });
 
-sendBtn.onclick = sendMessage;
+sendBtn.onclick = () => {
+  if (isGenerating) {
+    stopGeneration();
+    return;
+  }
+
+  sendMessage();
+};
 
 const newChatButtons = [
   document.getElementById("newChatTopBtn"),
@@ -924,7 +1013,43 @@ function bindMessageCopyButtons(container) {
   });
 }
 
-function addMessage(text, sender) {
+function formatAttachmentSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 KB";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** index;
+
+  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
+function renderAttachmentMarkup(attachment) {
+  if (attachment.kind === "image") {
+    return `
+      <div class="attachment-inline attachment-inline-image">
+        <img class="attachment-thumb" src="${attachment.data}" alt="${escapeHTML(attachment.name)}" />
+      </div>
+    `;
+  }
+
+  return `
+    <div class="attachment-inline attachment-inline-file">
+      <span class="attachment-file-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
+          <path d="M14 2v6h6" />
+          <path d="M9 13h6" />
+          <path d="M9 17h6" />
+        </svg>
+      </span>
+      <span class="attachment-name">${escapeHTML(attachment.name)}</span>
+    </div>
+  `;
+}
+
+function addMessage(text, sender, attachments = []) {
   removeEmptyState();
 
   const message = document.createElement("div");
@@ -1014,7 +1139,10 @@ function addMessage(text, sender) {
     `;
   } else {
     message.innerHTML = `
-      <div class="bubble"></div>
+      <div class="user-message-stack">
+        <div class="user-message-attachments"></div>
+        <div class="bubble"><div class="user-message-content"></div></div>
+      </div>
     `;
   }
 
@@ -1024,7 +1152,23 @@ function addMessage(text, sender) {
     bubble.dataset.rawText = String(text ?? "");
     bubble.innerHTML = renderMarkdownContent(text);
   } else {
-    bubble.textContent = text;
+    const userAttachments = message.querySelector(".user-message-attachments");
+    const userContent = bubble.querySelector(".user-message-content");
+
+    if (attachments.length) {
+      const attachmentMarkup = attachments
+        .map(attachment => renderAttachmentMarkup(attachment))
+        .join("");
+
+      userAttachments.insertAdjacentHTML("beforeend", attachmentMarkup);
+    }
+
+    if (text) {
+      const textNode = document.createElement("div");
+      textNode.className = "user-message-text";
+      textNode.textContent = text;
+      userContent.appendChild(textNode);
+    }
   }
 
   if (sender === "ai") {
@@ -1146,10 +1290,145 @@ function setupAIMessageActions(message) {
   };
 }
 
+function normalizeImageDataUrl(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== "string") {
+    return "";
+  }
+
+  const trimmed = dataUrl.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.startsWith("data:image/")) {
+    return trimmed;
+  }
+
+  const rawBase64 = trimmed.replace(/^data:.*;base64,/, "");
+
+  if (!rawBase64 || rawBase64 === trimmed) {
+    return trimmed;
+  }
+
+  const mimeType = /^data:(image\/[a-zA-Z0-9.+-]+);base64,/.test(trimmed)
+    ? trimmed.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/)[1]
+    : "image/jpeg";
+
+  return `data:${mimeType};base64,${rawBase64}`;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type || !file.type.startsWith("image/")) {
+      const reader = new FileReader();
+
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Unable to read file"));
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    image.onload = () => {
+      try {
+        const maxDimension = 1536;
+        const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+
+        const context = canvas.getContext("2d");
+        context.drawImage(image, 0, 0, width, height);
+
+        const mimeType = file.type && file.type.includes("png") ? "image/png" : "image/jpeg";
+        const quality = mimeType === "image/png" ? 0.92 : 0.82;
+
+        const dataUrl = canvas.toDataURL(mimeType, quality);
+        URL.revokeObjectURL(objectUrl);
+        resolve(dataUrl);
+      } catch (error) {
+        URL.revokeObjectURL(objectUrl);
+        reject(error);
+      }
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Unable to read image"));
+    };
+
+    image.src = objectUrl;
+  });
+}
+
+function createMultimodalMessageContent(message) {
+  const parts = [];
+  const messageText = typeof message.content === "string" ? message.content.trim() : "";
+
+  if (messageText) {
+    parts.push({
+      type: "text",
+      text: messageText
+    });
+  }
+
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+
+  attachments.forEach(attachment => {
+    if (attachment?.kind === "image" && attachment?.data) {
+      const normalizedImageUrl = normalizeImageDataUrl(attachment.data);
+
+      if (normalizedImageUrl) {
+        parts.push({
+          type: "image_url",
+          image_url: {
+            url: normalizedImageUrl
+          }
+        });
+      }
+      return;
+    }
+
+    if (attachment?.name) {
+      const attachmentNote = `Document attached: ${attachment.name}`;
+      parts.push({
+        type: "text",
+        text: attachmentNote
+      });
+    }
+  });
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  if (parts.length === 1 && parts[0].type === "text") {
+    return parts[0].text;
+  }
+
+  return parts;
+}
+
 function createNvidiaRequestBody() {
+  const shouldUseVisionModel = conversationMessages.some(message =>
+    Array.isArray(message.attachments) &&
+    message.attachments.some(attachment => attachment?.kind === "image")
+  );
+
   return {
-    model: NVIDIA_CONFIG.model,
-    messages: conversationMessages,
+    model: shouldUseVisionModel
+      ? "meta/llama-3.2-90b-vision-instruct"
+      : NVIDIA_CONFIG.model,
+    messages: conversationMessages.map(message => ({
+      role: message.role,
+      content: createMultimodalMessageContent(message)
+    })),
     temperature: NVIDIA_CONFIG.temperature,
     top_p: NVIDIA_CONFIG.topP,
     max_tokens: NVIDIA_CONFIG.maxTokens,
@@ -1157,10 +1436,139 @@ function createNvidiaRequestBody() {
   };
 }
 
+function renderAttachmentBox() {
+  if (!attachmentBox) {
+    return;
+  }
+
+  attachmentBox.innerHTML = "";
+
+  if (!pendingAttachments.length) {
+    attachmentBox.classList.remove("visible");
+    attachmentBox.style.display = "none";
+    return;
+  }
+
+  const visibleAttachments = pendingAttachments.slice(0, 5);
+  attachmentBox.classList.add("visible");
+  attachmentBox.style.display = "flex";
+
+  visibleAttachments.forEach((attachment, index) => {
+    const item = document.createElement("div");
+    item.className = "attachment-item";
+
+    if (attachment.kind === "image") {
+      item.classList.add("attachment-image-item");
+      item.innerHTML = `
+        <img class="attachment-thumb" src="${attachment.data}" alt="${escapeHTML(attachment.name)}" />
+      `;
+    } else {
+      item.classList.add("attachment-file-item");
+      item.innerHTML = `
+        <div class="attachment-file-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
+            <path d="M14 2v6h6" />
+            <path d="M9 13h6" />
+            <path d="M9 17h6" />
+          </svg>
+        </div>
+        <div class="attachment-meta">
+          <span class="attachment-name">${escapeHTML(attachment.name)}</span>
+        </div>
+      `;
+    }
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "attachment-remove";
+    removeBtn.title = "Remove attachment";
+    removeBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <path d="M6 6l12 12M18 6L6 18" />
+      </svg>
+    `;
+    removeBtn.onclick = () => {
+      pendingAttachments.splice(index, 1);
+      renderAttachmentBox();
+    };
+
+    item.appendChild(removeBtn);
+    attachmentBox.appendChild(item);
+  });
+}
+
+function removeAttachment(index) {
+  pendingAttachments.splice(index, 1);
+  renderAttachmentBox();
+}
+
+function addPendingAttachment(file) {
+  if (pendingAttachments.length >= 5) {
+    showToast("You can attach up to 5 files at a time.");
+    return;
+  }
+
+  const isImage = file.type.startsWith("image/");
+
+  readFileAsDataUrl(file)
+    .then(data => {
+      pendingAttachments.push({
+        id: createChatId(),
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        size: file.size || 0,
+        kind: isImage ? "image" : "file",
+        data
+      });
+
+      renderAttachmentBox();
+    })
+    .catch(() => {
+      showToast("Unable to attach this file");
+    });
+}
+
+function stopGeneration() {
+  if (!isGenerating) {
+    return;
+  }
+
+  if (activeRequestController) {
+    activeRequestController.abort();
+  }
+
+  if (activeResponseBubble) {
+    const currentText = String(activeResponseBubble.dataset.rawText || activeResponseBubble.textContent || "").trim();
+
+    if (currentText) {
+      activeResponseBubble.dataset.rawText = currentText;
+      activeResponseBubble.innerHTML = renderMarkdownContent(currentText);
+    } else {
+      activeResponseBubble.dataset.rawText = "Response stopped.";
+      activeResponseBubble.innerHTML = renderMarkdownContent("Response stopped.");
+    }
+  }
+
+  isGenerating = false;
+  activeRequestController = null;
+  activeTypingMessage = null;
+  activeResponseBubble = null;
+  updateSendButtonState();
+}
+
 async function sendMessage() {
   const messageText = input.value.trim();
+  const attachmentsToSend = pendingAttachments.map(attachment => ({
+    id: attachment.id,
+    name: attachment.name,
+    type: attachment.type,
+    size: attachment.size,
+    kind: attachment.kind,
+    data: attachment.data
+  }));
 
-  if (!messageText) {
+  if (!messageText && !attachmentsToSend.length) {
     return;
   }
 
@@ -1169,23 +1577,28 @@ async function sendMessage() {
   }
 
   isGenerating = true;
-  sendBtn.disabled = true;
+  activeRequestController = new AbortController();
+  updateSendButtonState();
 
-  addMessage(messageText, "user");
+  addMessage(messageText, "user", attachmentsToSend);
 
   conversationMessages.push({
     role: "user",
     content: messageText,
+    attachments: attachmentsToSend,
     createdAt: new Date().toISOString()
   });
 
+  pendingAttachments = [];
+  renderAttachmentBox();
   input.value = "";
   input.style.height = "auto";
 
   if (!currentChatId) {
+    const titleSource = messageText || (attachmentsToSend[0]?.name || "New chat");
     currentChatTitle =
-      messageText.slice(0, 32) +
-      (messageText.length > 32 ? "…" : "");
+      titleSource.slice(0, 32) +
+      (titleSource.length > 32 ? "…" : "");
   }
 
   persistCurrentChatState();
@@ -1193,6 +1606,8 @@ async function sendMessage() {
   const typingMessage = addMessage("", "ai");
 
   const bubble = typingMessage.querySelector(".bubble");
+  activeTypingMessage = typingMessage;
+  activeResponseBubble = bubble;
 
   bubble.innerHTML = `
     <span class="typing">
@@ -1220,6 +1635,7 @@ async function sendMessage() {
       "/api/chat",
       {
         method: "POST",
+        signal: activeRequestController?.signal,
 
         headers: {
           "Content-Type": "application/json",
@@ -1447,6 +1863,21 @@ async function sendMessage() {
       chatScroll.scrollHeight;
 
   } catch (error) {
+    if (error?.name === "AbortError" || activeRequestController?.signal.aborted) {
+      const stoppedText = String(bubble.dataset.rawText || assistantText || "").trim();
+
+      bubble.dataset.rawText = stoppedText || "Response stopped.";
+      bubble.innerHTML = renderMarkdownContent(stoppedText || "Response stopped.");
+
+      if (conversationMessages.length && conversationMessages[conversationMessages.length - 1]?.role === "assistant") {
+        conversationMessages.pop();
+      }
+
+      persistCurrentChatState();
+      setupAIMessageActions(typingMessage);
+      return;
+    }
+
     console.error(
       "NexaAI API Error:",
       error
@@ -1482,9 +1913,10 @@ async function sendMessage() {
 
   } finally {
     isGenerating = false;
-
-    sendBtn.disabled =
-      !input.value.trim();
+    activeRequestController = null;
+    activeTypingMessage = null;
+    activeResponseBubble = null;
+    updateSendButtonState();
   }
 }
 
@@ -1566,15 +1998,20 @@ function startNewChat() {
   currentChatId = null;
   currentChatTitle = null;
   conversationMessages = [];
+  pendingAttachments = [];
 
   isGenerating = false;
+  activeRequestController = null;
+  activeTypingMessage = null;
+  activeResponseBubble = null;
 
   renderConversation();
+  renderAttachmentBox();
 
   input.value = "";
   input.style.height = "auto";
 
-  sendBtn.disabled = true;
+  updateSendButtonState();
 
   closeAllMenus();
 
@@ -1582,18 +2019,32 @@ function startNewChat() {
 }
 
 $("attachBtn").onclick = () => {
-  $("fileInput").click();
+  fileInput.click();
 };
 
-$("fileInput").onchange = event => {
-  const selectedFiles =
-    event.target.files;
+fileInput.onchange = event => {
+  const selectedFiles = Array.from(event.target.files || []);
 
-  if (selectedFiles.length) {
-    showToast(
-      `${selectedFiles.length} file(s) attached ✦`
-    );
+  if (!selectedFiles.length) {
+    return;
   }
+
+  const remainingSlots = Math.max(0, 5 - pendingAttachments.length);
+
+  if (remainingSlots === 0) {
+    showToast("You can attach up to 5 files at a time.");
+    fileInput.value = "";
+    return;
+  }
+
+  const filesToAttach = selectedFiles.slice(0, remainingSlots);
+
+  if (selectedFiles.length > filesToAttach.length) {
+    showToast("You can attach up to 5 files at a time.");
+  }
+
+  filesToAttach.forEach(file => addPendingAttachment(file));
+  fileInput.value = "";
 };
 
 $("settingsBtn").onclick = () => {
@@ -1744,8 +2195,7 @@ function showToast(message) {
     );
 }
 
-sendBtn.disabled =
-  !input.value.trim();
+updateSendButtonState();
 
 window.addEventListener(
   "beforeunload",

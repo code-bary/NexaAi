@@ -21,7 +21,7 @@ const __dirname =
 
 app.use(
   express.json({
-    limit: "10mb"
+    limit: "25mb"
   })
 );
 
@@ -110,12 +110,18 @@ app.post(
 
       /* NVIDIA request */
 
-      const nvidiaResponse =
-        await fetch(
+      const requestTimeoutMs = 180000;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
+
+      let nvidiaResponse;
+
+      try {
+        nvidiaResponse = await fetch(
           "https://integrate.api.nvidia.com/v1/chat/completions",
           {
-
             method: "POST",
+            signal: controller.signal,
 
             headers: {
               "Content-Type":
@@ -131,7 +137,6 @@ app.post(
             },
 
             body: JSON.stringify({
-
               model:
                 model ||
                 "nvidia/nemotron-3.5-lightning-30b-a3b",
@@ -149,11 +154,24 @@ app.post(
 
               stream:
                 stream !== false
-
             })
-
           }
         );
+      } catch (error) {
+        clearTimeout(timeoutId);
+
+        if (error?.name === "AbortError") {
+          return res.status(504).json({
+            error: {
+              message: "NVIDIA request timed out while processing the image. Please try a smaller image or a simpler prompt."
+            }
+          });
+        }
+
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
 
       /* NVIDIA error */
