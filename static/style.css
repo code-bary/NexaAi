@@ -631,20 +631,29 @@
     }
     /* User message */
     .msg.user {
-      flex-direction: row-reverse;
+      display: flex;
+      justify-content: flex-end;
+      width: 100%;
     }
     .msg.user .bubble {
-      max-width: min(82%, 780px);
+      display: block;
+      width: fit-content;
+      max-width: 100%;
+      padding: 13px 17px;
+
+      white-space: normal;
+      overflow-wrap: break-word;
+      word-break: normal;
+
       color: #fff;
-      background:
-        linear-gradient(
-          135deg,
-          #4c1d95,
-          #7c3aed
-        );
+      background: linear-gradient(
+        135deg,
+        #4c1d95,
+        #7c3aed
+      );
+
       border-top-right-radius: 4px;
-      box-shadow:
-        0 4px 16px rgba(124, 58, 237, 0.3);
+      box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
     }
     /* 21. TYPING INDICATOR */
     .typing {
@@ -911,9 +920,8 @@
       display: flex;
       flex-direction: column;
       align-items: flex-end;
-      gap: 8px;
-      width: fit-content;
-      max-width: min(80%, 780px);
+      width: auto;
+      max-width: 82%;
       min-width: 0;
     }
     .user-message-attachments {
@@ -970,17 +978,15 @@
       display: flex;
       flex-direction: column;
       align-items: flex-end;
-      gap: 8px;
-      width: fit-content;
+      width: auto;
       max-width: 100%;
-      min-width: 0;
     }
     .user-message-text {
       display: block;
       width: auto;
       max-width: 100%;
       white-space: normal;
-      overflow-wrap: anywhere;
+      overflow-wrap: break-word;
       word-break: normal;
     }
     /* 25. CHAT INPUT CARD */
